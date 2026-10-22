@@ -105,15 +105,19 @@ def accumulate_grads(model, train_ds, device, n_batches, seed, workers):
     del loader
 
 
-def prune(model, importance, ratio, ignore_conv1=False):
-    """모든 그룹을 같은 비율로 자른다 (global pruning 아님). fc 출력은 항상 보호한다."""
+def prune(model, importance, ratio, ignore_conv1=False, ratio_dict=None):
+    """모든 그룹을 같은 비율로 자른다 (global pruning 아님). fc 출력은 항상 보호한다.
+
+    ratio_dict({모듈: 비율})를 주면 그 모듈이 시작점인 그룹만 그 비율로 자른다 (6단계에서 ratio=0과 함께 쓴다).
+    """
     ignored = [model.fc] + ([model.conv1] if ignore_conv1 else [])
     ex = torch.randn(1, 3, 224, 224, device=next(model.parameters()).device)
     Pruner = _find(tp.pruner, 'MetaPruner', 'BasePruner')
+    kw = {'importance': importance, 'ignored_layers': ignored}
     try:
-        pruner = Pruner(model, ex, importance=importance, pruning_ratio=ratio, ignored_layers=ignored)
+        pruner = Pruner(model, ex, pruning_ratio=ratio, pruning_ratio_dict=ratio_dict, **kw)
     except TypeError:  # 옛 버전은 ch_sparsity
-        pruner = Pruner(model, ex, importance=importance, ch_sparsity=ratio, ignored_layers=ignored)
+        pruner = Pruner(model, ex, ch_sparsity=ratio, ch_sparsity_dict=ratio_dict, **kw)
     pruner.step()
     model.zero_grad(set_to_none=True)
     return model

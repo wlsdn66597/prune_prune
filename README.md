@@ -126,6 +126,25 @@ python summarize_prune.py --recover-steps 280
 
 회복 예산은 먼저 몇 가지(56, 140, 280, 560)를 `--tasks all6 --criteria l2 --ratios 0.6`으로 시험해 보고, 정확도가 더 이상 오르지 않는 지점으로 정해요.
 
+### 6단계. stage별 민감도
+
+```bash
+python stage_sensitivity.py --shard 0 --nshards 3 --workers 4                       # 자른 직후
+python stage_sensitivity.py --recover-steps 840 --shard 0 --nshards 3 --workers 4   # 회복 후
+python stage_sensitivity.py --summary --recover-steps 840
+```
+
+6클래스와 가장 어려운/쉬운 쌍·삼중, 이렇게 5과제에서 한 번에 한 stage의 블록 내부 채널만 0.5 / 0.8 / 0.9로 잘라요.
+
+### 추가 실험. 회복 가능성 기반 선택
+
+```bash
+python prune_grid.py --recover-steps 56 --ratios 0.6 0.8 --shard 0 --nshards 3 --workers 4
+python select_by_recovery.py
+```
+
+모델마다 기준 후보 6개 중 하나를 고를 때, 자른 직후 검증 정확도로 고르는 것과 56 step 회복 후 검증 정확도로 고르는 것을 비교해요. 최종 840 step 결과는 이미 있는 것을 써요.
+
 ## 출력 구조
 
 ```
