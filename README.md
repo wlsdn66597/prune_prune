@@ -9,7 +9,12 @@
 | `make_folds.py` | 0-B | 중복 그룹, 이미지별 fold, 재질 클래스당 400장, 과제 22개, 과제별 유사도 |
 | `baseline_team.py` | 1 | 팀 분할에서 노트북 결과 재현 (seed 0, 1, 2) |
 | `train_base.py` | 2 | 22과제 × 5 fold 기준 모델 학습 + movement 기록 |
-| `summarize.py` | - | 결과 표 |
+| `summarize.py` | - | 1·2단계 결과 표 |
+| `check_movement.py` | 3 | 체크포인트 근사와 학습 중 누적 movement 비교 |
+| `make_temp_pruned.py` | - | 양자화 담당용 L2 임시 프루닝 모델 |
+| `prune_common.py` | - | 중요도 기준 6개, 프루닝, BN 재보정, 회복 학습 |
+| `prune_grid.py` | 4, 5 | 기준 × 비율 프루닝, 자른 직후 또는 회복 후 평가 |
+| `summarize_prune.py` | - | 4·5단계 결과 표 (L2 대비 차이 포함) |
 
 ## 설치
 
@@ -81,6 +86,45 @@ python summarize.py
   - `summarize.py` 표의 과제별 정확도
   - `best_step`이 항상 맨 끝(840)이나 맨 앞(56)에 몰리지 않는지
   - 실행당 시간(`sec`)
+
+### 3단계. movement 근사 검증 (학습 없음, 1분 안쪽)
+
+```bash
+python check_movement.py 2>&1 | tee work/movement_check.log
+```
+
+- `rho_ckpt_cum`: 체크포인트 근사와 학습 중 누적값의 채널 순위 상관 (1에 가까울수록 일치)
+- `jac_ckpt_cum`: 60%를 잘랐을 때 잘리는 채널의 겹침. 무작위끼리면 약 0.43
+- `rho_cum_late`: 누적값과 "첫 평가 구간을 뺀 누적값"의 상관 (낮으면 초반 구간이 순위를 많이 바꾼다는 뜻)
+
+### 양자화 담당용 임시 모델
+
+```bash
+python make_temp_pruned.py 2>&1 | tee work/temp_pruned.log
+```
+
+팀 분할 seed0 모델을 L2로 40%, 60% 자르고 280 step 회복 학습해서 `work/temp_pruned/l2_r0.4.pt`, `l2_r0.6.pt`로 저장해요. 구조가 바뀐 모델이라 통째로 저장했고, `torch.load(경로, weights_only=False)`로 불러요.
+
+### 4단계. 자른 직후 평가
+
+```bash
+# 시험 실행
+python prune_grid.py --tasks pair_gl-pl --folds 0 --ratios 0.6 --out-name smoke_prune
+# 본 실행 (터미널 3개 또는 nohup)
+python prune_grid.py --shard 0 --nshards 3 --workers 4
+python summarize_prune.py
+```
+
+기준 모델 110개 × 기준 6개 × 비율 6개(0.2~0.95)를 한 번에 잘라요. BN 통계를 다시 잡은 뒤 평가해요. 결과는 `work/runs/prune/<과제>/<fold>/<기준>_r<비율>_rec0.json`에 쌓여요.
+
+### 5단계. 회복 학습 후 평가
+
+```bash
+python prune_grid.py --recover-steps 280 --ratios 0.6 0.8 --shard 0 --nshards 3 --workers 4
+python summarize_prune.py --recover-steps 280
+```
+
+회복 예산은 먼저 몇 가지(56, 140, 280, 560)를 `--tasks all6 --criteria l2 --ratios 0.6`으로 시험해 보고, 정확도가 더 이상 오르지 않는 지점으로 정해요.
 
 ## 출력 구조
 

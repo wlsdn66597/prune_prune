@@ -164,8 +164,9 @@ def team_split(images):
 
 # ---------------- 모델과 평가 ----------------
 
-def build_model(num_classes):
-    m = models.resnet18(weights=models.ResNet18_Weights.IMAGENET1K_V1)  # 노트북과 같은 V1 가중치
+def build_model(num_classes, pretrained=True):
+    weights = models.ResNet18_Weights.IMAGENET1K_V1 if pretrained else None  # 노트북과 같은 V1 가중치
+    m = models.resnet18(weights=weights)
     m.fc = nn.Linear(m.fc.in_features, num_classes)
     return m
 
