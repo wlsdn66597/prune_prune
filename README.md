@@ -145,6 +145,15 @@ python select_by_recovery.py
 
 모델마다 기준 후보 6개 중 하나를 고를 때, 자른 직후 검증 정확도로 고르는 것과 56 step 회복 후 검증 정확도로 고르는 것을 비교해요. 최종 840 step 결과는 이미 있는 것을 써요.
 
+### 제안 알고리즘 TRP
+
+설계와 관련 연구는 [TRP.md](TRP.md)에 있어요.
+
+```bash
+nohup bash run_trp.sh > work/trp_queue.log 2>&1 &     # 예산 예측 검증 -> 시험 실행 -> 본 실행 -> 요약
+cat work/trp_queue.log work/predict_budget.log work/trp_summary.log
+```
+
 ## 출력 구조
 
 ```

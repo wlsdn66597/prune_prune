@@ -123,6 +123,27 @@ def prune(model, importance, ratio, ignore_conv1=False, ratio_dict=None):
     return model
 
 
+def prune_global(model, importance, ratio, max_ratio=0.95):
+    """Torch-Pruning 전역 프루닝: 정규화한 중요도로 모든 그룹을 함께 순위 매겨 자른다 (그룹당 최대 max_ratio)."""
+    ex = torch.randn(1, 3, 224, 224, device=next(model.parameters()).device)
+    Pruner = _find(tp.pruner, 'MetaPruner', 'BasePruner')
+    kw = {'importance': importance, 'ignored_layers': [model.fc], 'global_pruning': True}
+    options = [{'pruning_ratio': ratio, 'max_pruning_ratio': max_ratio},
+               {'ch_sparsity': ratio, 'max_ch_sparsity': max_ratio},
+               {'pruning_ratio': ratio}]
+    for extra in options:
+        try:
+            pruner = Pruner(model, ex, **kw, **extra)
+            break
+        except TypeError:
+            continue
+    else:
+        raise RuntimeError('전역 프루닝 설정을 만들 수 없습니다. torch-pruning 버전을 확인하세요.')
+    pruner.step()
+    model.zero_grad(set_to_none=True)
+    return model
+
+
 @torch.no_grad()
 def recalibrate_bn(model, cache, idx):
     """BN 통계만 다시 잡는다 (EagleEye, ECCV 2020). 증강 없는 학습 이미지를 train 모드로 통과시킨다."""
