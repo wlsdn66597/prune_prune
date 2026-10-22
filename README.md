@@ -154,6 +154,15 @@ nohup bash run_trp.sh > work/trp_queue.log 2>&1 &     # 예산 예측 검증 -> 
 cat work/trp_queue.log work/predict_budget.log work/trp_summary.log
 ```
 
+### 제안 알고리즘 GTP (점진 궤적 프루닝)
+
+설계와 관련 연구는 [GTP.md](GTP.md)에 있어요. TRP 대기열이 끝나면 자동으로 시작해요.
+
+```bash
+nohup bash run_gradual.sh > work/gradual_queue.log 2>&1 &
+cat work/gradual_queue.log work/gradual_summary.log
+```
+
 ## 출력 구조
 
 ```
