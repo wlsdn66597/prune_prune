@@ -1,0 +1,10 @@
+# torch, torchvision은 PyTorch 공식 사이트의 설치 명령으로 CUDA 버전에 맞게 먼저 설치한다
+torch>=2.1
+torchvision>=0.16
+numpy
+pandas
+scikit-learn>=1.3
+matplotlib
+pillow
+scipy
+torch-pruning>=1.4  # 4단계(프루닝)부터 사용

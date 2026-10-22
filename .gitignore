@@ -1,0 +1,10 @@
+# 실험 결과와 캐시 (용량이 크고 원격 PC에서 새로 만든다)
+work/
+# 데이터셋은 깃에 올리지 않는다
+dataset-resized/
+*.zip
+# 파이썬·가상환경
+__pycache__/
+*.pyc
+.venv/
+.ipynb_checkpoints/
