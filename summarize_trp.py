@@ -13,7 +13,10 @@ from scipy.stats import wilcoxon
 
 import common as C
 
-UNIFORM = {0.4: 0.36, 0.6: 0.16, 0.8: 0.04, 0.9: 0.01}  # 균일 비율 -> 같은 크기의 예산
+UNIFORM = {  # 균일 비율 -> 같은 자원의 예산
+    'params': {0.4: 0.36, 0.6: 0.16, 0.8: 0.04, 0.9: 0.01},
+    'macs': {0.4: 0.372, 0.6: 0.173, 0.8: 0.048, 0.9: 0.015},
+}
 WIDTH = {'layer1': 64, 'layer2': 128, 'layer3': 256, 'layer4': 512}
 
 
@@ -35,14 +38,14 @@ def load_trp(work, out_name):
     return pd.DataFrame(rows)
 
 
-def load_uniform(work, keys):
+def load_uniform(work, keys, resource):
     f = C.runs_dir(work) / 'prune_results_rec840.csv'
     if not f.exists():
         return pd.DataFrame()
     d = pd.read_csv(f)
-    d = d[d.crit.isin(['l2', 'mov_cum']) & d.ratio.isin(list(UNIFORM))].copy()
+    d = d[d.crit.isin(['l2', 'mov_cum']) & d.ratio.isin(list(UNIFORM[resource]))].copy()
     d['method'] = d.crit.map({'l2': 'uniform_l2', 'mov_cum': 'uniform_mov'})
-    d['budget'] = d.ratio.map(UNIFORM)
+    d['budget'] = d.ratio.map(UNIFORM[resource])
     d = d.merge(keys, on=['task', 'fold', 'seed'])
     return d[['task', 'fold', 'seed', 'method', 'budget', 'acc', 'nll', 'params_ratio', 'macs_ratio']]
 
@@ -64,6 +67,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--work-dir', default='work')
     ap.add_argument('--out-name', default='trp')
+    ap.add_argument('--resource', choices=['params', 'macs'], default='params',
+                    help='예산 기준. macs면 균일 프루닝을 같은 MACs끼리 짝짓는다')
     args = ap.parse_args()
     pd.set_option('display.width', 220)
 
@@ -71,8 +76,9 @@ def main():
     if trp.empty:
         raise SystemExit('TRP 결과가 없습니다.')
     keys = trp[['task', 'fold', 'seed']].drop_duplicates()
-    df = pd.concat([trp, load_uniform(args.work_dir, keys)], ignore_index=True)
-    df.to_csv(C.runs_dir(args.work_dir) / 'trp_results.csv', index=False)
+    df = pd.concat([trp, load_uniform(args.work_dir, keys, args.resource)], ignore_index=True)
+    df.to_csv(C.runs_dir(args.work_dir) / f'{args.out_name}_results.csv', index=False)
+    print(f'예산 기준: {args.resource}')
     print(f'과제 {sorted(keys.task.unique())}, 과제·fold {len(keys)}개\n')
 
     print('== test 정확도 (과제·fold 평균): 방법 × 예산(남는 파라미터 비율) ==')
