@@ -81,7 +81,8 @@ def main():
     print(f'예산 기준: {args.resource}')
     print(f'과제 {sorted(keys.task.unique())}, 과제·fold {len(keys)}개\n')
 
-    print('== test 정확도 (과제·fold 평균): 방법 × 예산(남는 파라미터 비율) ==')
+    unit = '남는 파라미터 비율' if args.resource == 'params' else '남는 MACs 비율'
+    print(f'== test 정확도 (과제·fold 평균): 방법 × 예산({unit}) ==')
     print(df.pivot_table(index='method', columns='budget', values='acc', aggfunc='mean').round(4).to_string())
     print('\n== 실제로 남은 파라미터 / MACs 비율 ==')
     print(df.pivot_table(index='method', columns='budget', values=['params_ratio', 'macs_ratio'],
