@@ -21,95 +21,17 @@ import argparse
 import copy
 import hashlib
 import json
-import os
 import shutil
-import subprocess
 import time
 from pathlib import Path
 
-TRAIN_SCRIPTS = {
-    'baseline_team.py', 'train_base.py', 'prune_grid.py', 'stage_sensitivity.py', 'select_by_recovery.py',
-    'trp_search.py', 'trp_joint.py', 'gradual_prune.py', 'gradual_alloc.py', 'make_team_trp.py',
-    'train_mobile.py', 'make_temp_pruned.py', 'diagnose_trp_probe.py', 'noise_gate.py',
-}
+from wait_idle import wait_for_idle
+
 ROLES = ['oracle_acc', 'oracle_nll', 'pick_p280', 'pick_p56']
-GPU_BUSY = 10  # GPU 사용률(%)이 이 이상이면 누군가 계산 중으로 본다
 
 
 def log(msg):
     print(time.strftime('[%m-%d %H:%M:%S] ') + msg, flush=True)
-
-
-# ---------------- 대기 ----------------
-
-def own_processes():
-    """이 사용자의 살아 있는 프로세스 (pid, argv). 자기 자신과 좀비는 뺀다."""
-    me, uid = os.getpid(), os.getuid()
-    for d in Path('/proc').iterdir():
-        if not d.name.isdigit() or int(d.name) == me:
-            continue
-        try:
-            if d.stat().st_uid != uid or (d / 'stat').read_text().rsplit(')', 1)[1].split()[0] in {'Z', 'X'}:
-                continue
-            argv = [a.decode(errors='replace') for a in (d / 'cmdline').read_bytes().split(b'\0') if a]
-        except (OSError, IndexError):
-            continue
-        if argv:
-            yield d.name, argv
-
-
-def is_workload(argv):
-    """실험 스크립트(python ...py)나 다른 대기열(run_*.sh)인지. 이 대기열 자신과 대기만 하는 프로세스는 뺀다."""
-    exe, names = Path(argv[0]).name, [Path(a).name for a in argv[1:]]
-    if exe.startswith('python'):
-        return any(n in TRAIN_SCRIPTS for n in names) and '--wait-only' not in argv
-    if exe in {'bash', 'sh', 'dash'}:
-        return any(n.startswith('run_') and n.endswith('.sh') and n != 'run_noise_gate.sh' for n in names)
-    return False
-
-
-def gpu_util_peak(samples=5):
-    """GPU 사용률을 1초 간격으로 재서 최댓값을 낸다. 메모리만 잡고 쉬는 프로세스(열린 노트북 커널 등)는 0%다."""
-    peak = 0
-    for i in range(samples):
-        try:
-            out = subprocess.run(['nvidia-smi', '--query-gpu=utilization.gpu', '--format=csv,noheader,nounits'],
-                                 capture_output=True, text=True, timeout=20, check=True).stdout
-        except (OSError, subprocess.SubprocessError):
-            return None
-        peak = max([peak] + [int(t) for t in out.split() if t.isdigit()])
-        if i + 1 < samples:
-            time.sleep(1)
-    return peak
-
-
-def wait_for_idle(poll):
-    """아는 실험 스크립트와 run_*.sh 대기열이 없고 GPU도 쉬는 상태가 두 번 연속 확인되면 끝난다.
-
-    이름을 모르는 학습도 GPU 사용률로 잡는다. 메모리만 잡은 채 쉬는 프로세스 때문에 끝없이 기다리지는 않는다.
-    """
-    if not Path('/proc').is_dir():
-        raise SystemExit('대기 기능은 리눅스 서버에서만 동작합니다.')
-    idle, last, warned = 0, None, False
-    while idle < 2:
-        busy = {pid: ' '.join(argv)[:150] for pid, argv in own_processes() if is_workload(argv)}
-        util = gpu_util_peak()
-        if util is None and not warned:
-            log('nvidia-smi를 쓸 수 없어 실행 중인 스크립트 이름으로만 판단합니다.')
-            warned = True
-        if util is not None and util >= GPU_BUSY:
-            busy['gpu'] = f'GPU 사용률 {util}%'
-        if busy:
-            idle = 0
-            if sorted(busy) != last:
-                log('기다리는 중: ' + json.dumps(busy, ensure_ascii=False))
-                last = sorted(busy)
-        else:
-            idle += 1
-            last = None
-        if idle < 2:
-            time.sleep(poll)
-    log('다른 학습이 모두 끝났습니다.')
 
 
 # ---------------- 실험 설계 (가벼움, 요약 스크립트도 씀) ----------------
