@@ -32,11 +32,21 @@ def acc(r, split):
     return 100 * (r['test']['acc'] if split == 'test' else r['val_curve'][str(r['steps'])]['acc'])
 
 
-def paired(res, key, a, b, seeds, split, steps_a, steps_b):
-    """같은 시드끼리 짝지은 (a - b) 정확도 차이(%p)의 평균. 짝이 하나도 없으면 None."""
-    d = [acc(res[key, a, s, steps_a], split) - acc(res[key, b, s, steps_b], split)
-         for s in seeds if (key, a, s, steps_a) in res and (key, b, s, steps_b) in res]
-    return sum(d) / len(d) if d else None
+def paired(res, key, a, b, seeds, split, steps_a, steps_b, ref_seeds=None):
+    """(a - b) 정확도 차이(%p). 결과가 없으면 None.
+
+    ref_seeds가 없으면 같은 시드끼리 짝지은 차이의 평균, 있으면 a의 seeds 평균 - b의 ref_seeds 평균.
+    같은 시드로 다시 돌려도 GPU 비결정성 때문에 결과가 달라지므로, 짝짓기보다 기준 시드를 많이 쓰는 쪽이 안정적이다.
+    """
+    if a == b and steps_a == steps_b:
+        return 0.0
+    if ref_seeds is None:
+        d = [acc(res[key, a, s, steps_a], split) - acc(res[key, b, s, steps_b], split)
+             for s in seeds if (key, a, s, steps_a) in res and (key, b, s, steps_b) in res]
+        return sum(d) / len(d) if d else None
+    xa = [acc(res[key, a, s, steps_a], split) for s in seeds if (key, a, s, steps_a) in res]
+    xb = [acc(res[key, b, s, steps_b], split) for s in ref_seeds if (key, b, s, steps_b) in res]
+    return mean(xa) - mean(xb) if xa and xb else None
 
 
 def mean(xs):
@@ -92,7 +102,11 @@ def main():
     ap.add_argument('--diag-name', default='probe_diag_v1')
     ap.add_argument('--out-name', default='noise_gate_v1')
     add_design_args(ap)
+    ap.add_argument('--ref', choices=['paired', 'all'], default='paired',
+                    help='B·C의 균일 기준: 같은 시드끼리 짝(paired) 또는 균일 시드 전체 평균(all)')
     args = ap.parse_args()
+    ref = sorted(set(args.a_seeds) | set(args.b_seeds)) if args.ref == 'all' else None
+    ref_txt = f'균일 시드 {ref} 평균 대비' if ref else '균일 대비, 같은 시드끼리 짝'
     runs = Path(args.work_dir) / 'runs'
     conds = load_conditions(runs / args.diag_name)
     res = load_results(runs / args.out_name)
@@ -153,11 +167,11 @@ def main():
                 per[key, role] = {
                     'cand': a,
                     'diag': 100 * (p[role]['curve'][str(fin)]['acc'] - u['curve'][str(fin)]['acc']),
-                    'val': paired(res, key, a, u['name'], new, 'val', fin, fin),
-                    'test': paired(res, key, a, u['name'], args.b_seeds, 'test', fin, fin),
-                    'test_new': paired(res, key, a, u['name'], new, 'test', fin, fin)}
+                    'val': paired(res, key, a, u['name'], new, 'val', fin, fin, ref),
+                    'test': paired(res, key, a, u['name'], args.b_seeds, 'test', fin, fin, ref),
+                    'test_new': paired(res, key, a, u['name'], new, 'test', fin, fin, ref)}
     col = lambda role, name: [v[name] for (_, r), v in per.items() if r == role]
-    print('\n[B] 진단이 고른 후보를 다시 학습 (균일 대비 %p, 같은 시드끼리 짝, 조건 평균)')
+    print(f'\n[B] 진단이 고른 후보를 다시 학습 (%p, {ref_txt}, 조건 평균)')
     print(f"  {'role':<12}{'diag val':>10}{'new val':>9}{'test':>8}{'new test':>10}{'test W/T/L':>12}{'p':>7}")
     for role in ROLES:
         print(f"  {role:<12}{fmt(mean(col(role, 'diag'))):>10}{fmt(mean(col(role, 'val'))):>9}"
@@ -180,8 +194,8 @@ def main():
     for c in conds:
         u = picks(c['rows'])['uniform']['name']
         for steps in args.c_steps:
-            gain[c['key'], steps] = paired(res, c['key'], u, u, args.c_seeds, 'test', steps, fin)
-    print(f'\n[C] 균일 회복을 늘린 효과 (test, 시드 {args.c_seeds}, 균일 {fin} step 대비 %p)')
+            gain[c['key'], steps] = paired(res, c['key'], u, u, args.c_seeds, 'test', steps, fin, ref)
+    print(f'\n[C] 균일 회복을 늘린 효과 (test, 시드 {args.c_seeds}, {fin} step {ref_txt} %p)')
     print(f"  {'condition':<20}" + ''.join(f'{f"{s}step":>10}' for s in args.c_steps))
     for c in conds:
         print(f"  {label(c['key']):<20}" + ''.join(f"{fmt(gain[c['key'], s]):>10}" for s in args.c_steps))
