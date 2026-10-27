@@ -3,8 +3,12 @@
 --recover-steps 0   : 4단계, 자른 직후 평가 (학습 없음)
 --recover-steps 280 : 5단계, 회복 학습 후 평가 (짧은 예산은 56)
 
+--init pretrained   : 파인튜닝을 건너뛰고 ImageNet 사전학습 가중치를 바로 자른 뒤 학습한다 (결과 이름 앞에 pretrained_).
+                      movement 기준이면 마스크만 파인튜닝 기록에서 가져오고 가중치는 사전학습 값을 쓴다.
+
 사용: python prune_grid.py --shard 0 --nshards 3
       python prune_grid.py --recover-steps 280 --ratios 0.6 0.8 --shard 0 --nshards 3
+      python prune_grid.py --init pretrained --criteria l2 --recover-steps 2800 --shard 0 --nshards 3
 끝난 조합은 건너뛴다.
 """
 import argparse
@@ -35,6 +39,8 @@ def main():
     ap.add_argument('--nshards', type=int, default=1)
     ap.add_argument('--base-name', default='base', help='기준 모델 폴더 이름')
     ap.add_argument('--out-name', default='prune', help='결과 폴더 이름 (시험 실행은 다른 이름으로)')
+    ap.add_argument('--init', choices=['finetuned', 'pretrained', 'scratch'], default='finetuned',
+                    help='자르기 전 가중치: 파인튜닝된 기준 모델(기본), ImageNet 사전학습(파인튜닝 생략), 무작위')
     args = ap.parse_args()
 
     images, tasks = C.load_meta(args.work_dir, args.data_root)
@@ -59,13 +65,18 @@ def main():
         split = C.task_split(images, task, f)
         (tr_idx, tr_y), (va_idx, va_y), (te_idx, te_y) = split['train'], split['val'], split['test']
         train_ds = C.ImageList(images['path'].to_numpy()[tr_idx], tr_y, C.train_tf)
-        base = P.load_base(base_dir, k, args.device)
+        if args.init == 'finetuned':
+            base = P.load_base(base_dir, k, args.device)
+        else:  # 기준 모델 폴더는 조건 목록과 movement 기록(마스크)에만 쓴다
+            C.set_seed(s)
+            base = C.build_model(k, pretrained=args.init == 'pretrained').to(args.device).eval()
         move = P.load_movement(base_dir)
         base_stats = P.model_stats(base)
         t0 = time.time()
         for crit in args.criteria:
+            tag = crit if args.init == 'finetuned' else f'{args.init}_{crit}'
             for r in args.ratios:
-                out = runs / args.out_name / t / f'fold{f}_seed{s}' / f'{crit}_r{r}_rec{args.recover_steps}.json'
+                out = runs / args.out_name / t / f'fold{f}_seed{s}' / f'{tag}_r{r}_rec{args.recover_steps}.json'
                 if out.exists():
                     continue
                 C.set_seed(s)
@@ -79,7 +90,7 @@ def main():
                 val_logits = C.predict_logits(model, cache, va_idx)
                 test_logits = C.predict_logits(model, cache, te_idx)
                 st = P.model_stats(model)
-                info = {'task': t, 'fold': f, 'seed': s, 'criterion': crit, 'ratio': r,
+                info = {'task': t, 'fold': f, 'seed': s, 'criterion': tag, 'init': args.init, 'ratio': r,
                         'recover_steps': args.recover_steps, 'ignore_conv1': args.ignore_conv1,
                         'val': C.metrics(val_logits, va_y), 'test': C.metrics(test_logits, te_y),
                         'params': st['params'], 'macs': st['macs'],

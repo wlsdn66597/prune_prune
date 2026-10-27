@@ -196,7 +196,8 @@ def metrics(logits, y):
 
 # ---------------- 학습 ----------------
 
-def train_model(model, train_ds, cache, val_idx, val_y, *, seed, total_steps, eval_every, device, workers, tag):
+def train_model(model, train_ds, cache, val_idx, val_y, *, seed, total_steps, eval_every, device, workers, tag,
+                lr=LR):
     """compare_fc.ipynb의 학습 루프를 step 기준으로 옮긴 것. 검증 정확도가 가장 높은 시점을 고른다.
 
     매 step마다 conv 가중치의 movement 점수(-grad * weight, Sanh et al. 2020)를 누적하고,
@@ -206,7 +207,7 @@ def train_model(model, train_ds, cache, val_idx, val_y, *, seed, total_steps, ev
     loader = DataLoader(train_ds, BATCH, shuffle=True, num_workers=workers, generator=g,
                         pin_memory=device != 'cpu', persistent_workers=workers > 0)
     model.to(device)
-    opt = torch.optim.AdamW(model.parameters(), lr=LR)
+    opt = torch.optim.AdamW(model.parameters(), lr=lr)
     crit = nn.CrossEntropyLoss()
     convs = conv_weights(model)
     pre = {n: w.detach().clone() for n, w in convs.items()}  # 사전학습 conv 가중치

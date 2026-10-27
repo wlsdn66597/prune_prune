@@ -9,6 +9,7 @@
 """
 import argparse
 import json
+import platform
 import statistics
 import time
 from pathlib import Path
@@ -90,6 +91,10 @@ def main():
     ref = info['resnet18']
     lat = {n: {t: latency(out_dir / f'{n}.pt', t, args.warmup, args.runs, not args.no_optimize) for t in args.threads}
            for n in info}
+    host = platform.node() or 'host'  # 기기마다 따로 저장 (요약 스크립트가 읽는다)
+    (out_dir / f'latency_{host}.json').write_text(json.dumps(
+        {'torch': torch.__version__, 'ms': {n: {str(t): v for t, v in d.items()} for n, d in lat.items()}},
+        indent=1), encoding='utf-8')
     print(f'torch {torch.__version__}, 배치 1, 224x224, 중앙값 ms (속도 향상은 resnet18 대비)')
     head = ''.join(f'{f"{t}thr ms":>10}{"x":>7}' for t in args.threads)
     print(f'{"model":<24}{"params(M)":>10}{"MACs(M)":>9}{"MACs 비":>9}{head}')
