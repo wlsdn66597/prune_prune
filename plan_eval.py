@@ -49,9 +49,9 @@ RULES = ['고정', '클래스 수', '실루엣', '실루엣+k']
 HOWS = {'ft': '파인튜닝 + movement', 'skip': '생략', 'mix': '혼합'}
 
 
-def rstar(drops, tol):
-    """하락(비율 0.4~0.9 순)이 tol(%p)을 처음 넘는 지점을 선형 보간한 비율 (predict_budget.py와 같은 방식)."""
-    x, y = np.asarray(GRID), np.r_[0.0, drops]
+def rstar(drops, tol, grid=GRID):
+    """하락(grid[1:] 순)이 tol(%p)을 처음 넘는 지점을 선형 보간한 비율 (predict_budget.py와 같은 방식)."""
+    x, y = np.asarray(grid), np.r_[0.0, drops]
     for i in range(1, len(x)):
         if y[i] > tol:
             return x[i - 1] + (tol - y[i - 1]) / (y[i] - y[i - 1]) * (x[i] - x[i - 1])
@@ -70,6 +70,24 @@ def predict(tt, task, sil):
     c, *_ = np.linalg.lstsq(np.c_[np.ones(len(o)), o.sil, o.k], o.rstar.to_numpy(), rcond=None)
     return {'고정': o.rstar.mean(), '클래스 수': np.polyval(a, k), '실루엣': np.polyval(b, sil),
             '실루엣+k': float(c @ [1, sil, k])}
+
+
+def load_points(runs):
+    """파인튜닝 + movement 실행(split_points.csv의 fp32, 비율 0은 원본): 조건 x 비율의 val, test(%), size_mb."""
+    d = pd.read_csv(runs / 'split_points.csv')
+    pts = d[d.bits == 'fp32'].pivot_table(index=['task', 'fold'], columns='ratio', values=['val', 'test', 'size_mb'])
+    return pts[pts['test'][GRID].notna().all(axis=1)]
+
+
+def train_silhouettes(work_dir, data_root, conds):
+    """조건(과제, fold)마다 학습 이미지만으로 계산한 실루엣 (사전학습 ResNet-18 특징, 코사인)."""
+    images, tasks = C.load_meta(work_dir, data_root)
+    feats = np.load(C.meta_dir(work_dir) / 'feat_pretrained.npy')
+    sil = {}
+    for t, f in conds:
+        idx, y = C.task_split(images, tasks[t], f)['train']
+        sil[(t, f)] = silhouette_score(feats[idx], y, metric='cosine')
+    return pd.Series(sil).rename_axis(['task', 'fold'])
 
 
 def load_skip(runs):
@@ -91,9 +109,7 @@ def main():
     pd.set_option('display.width', 220)
     runs, tol = C.runs_dir(args.work_dir), args.tol
 
-    d = pd.read_csv(runs / 'split_points.csv')
-    pts = d[d.bits == 'fp32'].pivot_table(index=['task', 'fold'], columns='ratio', values=['val', 'test', 'size_mb'])
-    pts = pts[pts['test'][GRID].notna().all(axis=1)]
+    pts = load_points(runs)
     test, val, size = pts['test'], pts['val'], pts['size_mb']
     conds = list(pts.index)
     q = {g: [json.loads(p.read_text(encoding='utf-8')) for p in runs.glob(f'qready/*/fold*_seed0/movement_r{g}.json')]
@@ -106,14 +122,8 @@ def main():
             return FT_STEPS, FT_STEPS
         return (FT_STEPS if ft else 0) + REC_STEPS, (FT_STEPS if ft else 0) + REC_STEPS * macs[g]
 
-    images, tasks = C.load_meta(args.work_dir, args.data_root)
-    feats = np.load(C.meta_dir(args.work_dir) / 'feat_pretrained.npy')
-    sil = {}
-    for t, f in conds:
-        idx, y = C.task_split(images, tasks[t], f)['train']
-        sil[(t, f)] = silhouette_score(feats[idx], y, metric='cosine')
-    sil = pd.Series(sil)
-    sim = pd.read_csv(C.meta_dir(args.work_dir) / 'similarity.csv').set_index('task')
+    sil = train_silhouettes(args.work_dir, args.data_root, conds)
+    sim =pd.read_csv(C.meta_dir(args.work_dir) / 'similarity.csv').set_index('task')
     drops = test.rsub(test[0.0], axis=0).groupby(level='task').mean()  # 원본 - 비율, fold 평균
     tt = pd.DataFrame({'k': sim.k.reindex(drops.index), 'sil': sil.groupby(level=0).mean().reindex(drops.index),
                        'rstar': [rstar(drops.loc[t, GRID[1:]].to_numpy(), tol) for t in drops.index]})
