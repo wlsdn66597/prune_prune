@@ -33,6 +33,8 @@ fold 0·1로 탐색하고, 통과한 항목만 fold 2·3·4로 확인한다. 판
   파인튜닝 + movement 결과는 prune_grid(mov_cum, 2800 step)에서, 비율 0은 기준 모델 result.json에서 읽는다.
   확인 항목은 [A] 요구 90%의 과제별 계획 이득과 [D]이고, 기준은 탐색과 같다. 둘 다 '예'면 재현됐다고 본다.
   [A]의 프루닝 쪽 기여, [A] 92%, [B]는 참고로 낸다. 생략 실행을 학습하지 않았으면 [C]는 보류, [E]는 판정하지 않는다.
+  2차 확인 (1차가 재현된 뒤, 생략 실행 fold 2·3·4를 학습하기 전에 정함): [C]와, 생략 실행 요구 90%에서
+  곡선(실루엣)의 이득이 FCA식보다 0.03 이상 큰가(탐색 +0.30). 둘 다 '예'면 재현됐다고 본다.
 
 사용: python plan_diag.py > work/plan_diag.txt                          # 탐색 (fold 0·1)
       python plan_diag.py --folds 2 3 4 > work/plan_confirm.txt         # 확인
@@ -318,9 +320,10 @@ def main():
     print('\n[A] 배포 요구 목표: test 정확도가 요구치 이상이면서 최대한 자르기 (실행: 파인튜닝 + movement)')
     res_a = {a: report(f'요구 {a:g}%', ft, ft_val, sil, sim.k, a, size, 'ft', rules_a, detail=a == a0)
              for a in args.targets}
+    res_skip = None
     if skip is not None and len(skip):
-        print('\n  참고: 파인튜닝 생략 실행 (생략 결과로 규칙을 만들고 평가)')
-        report(f'요구 {a0:g}%, 생략', skip, skip_val, sil, sim.k, a0, size, 'skip', rules_a)
+        print('\n  파인튜닝 생략 실행 (생략 결과로 규칙을 만들고 평가)')
+        res_skip = report(f'요구 {a0:g}%, 생략', skip, skip_val, sil, sim.k, a0, size, 'skip', rules_a)
 
     print(f'\n[B] 원래 목표: 원본 대비 하락 ≤ {args.tol:g}%p (실행: 파인튜닝 + movement)')
     res_b = report(f'하락 ≤ {args.tol:g}%p', ft.sub(ft[0.0], axis=0), ft_val.sub(ft_val[0.0], axis=0), sil, sim.k,
@@ -339,6 +342,10 @@ def main():
               f'({res[MAIN]["gain"]:+.3f}), 프루닝 쪽 기여 {yes(res[MAIN]["gain"] - res["FCA식"]["gain"] >= 0.03)} '
               f'(FCA식보다 {res[MAIN]["gain"] - res["FCA식"]["gain"]:+.3f})')
     print(f'  [B] 원래 목표 회복: {yes(res_b[MAIN]["gain"] >= 0.05)} ({res_b[MAIN]["gain"]:+.3f})')
+    skip_gain = None if res_skip is None else res_skip[MAIN]['gain'] - res_skip['FCA식']['gain']
+    if res_skip is not None:
+        print(f'  [A] 요구 {a0:g}%, 생략 실행: 과제별 계획 이득 {yes(res_skip[MAIN]["gain"] >= 0.05)} '
+              f'({res_skip[MAIN]["gain"]:+.3f}), 프루닝 쪽 기여 {yes(skip_gain >= 0.03)} (FCA식보다 {skip_gain:+.3f})')
     print(f'  [C] 쉬운 과제만 생략: {yes(c)}')
     print(f'  [D] 난이도가 회복 속도를 정한다: {yes(d)}')
     if explore:
@@ -347,6 +354,9 @@ def main():
         both = None if d is None else (res_a[a0][MAIN]['gain'] >= 0.05 and d)
         print(f'  확인 항목 ([A] 요구 {a0:g}% 과제별 계획 이득, [D]): '
               f'{"보류 (결과 없음)" if both is None else ("둘 다 재현됨" if both else "재현 안 됨")}')
+        both2 = None if c is None or skip_gain is None else (c and skip_gain >= 0.03)
+        print(f'  2차 확인 항목 ([C], 생략 실행의 FCA식 대비 기여): '
+              f'{"보류 (생략 실행 결과 없음)" if both2 is None else ("둘 다 재현됨" if both2 else "재현 안 됨")}')
 
 
 if __name__ == '__main__':
