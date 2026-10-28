@@ -29,7 +29,13 @@ fold 0·1로 탐색하고, 통과한 항목만 fold 2·3·4로 확인한다. 판
   [D] 실루엣과 회복 이득(0.8·0.9)의 Spearman ρ<0, p<0.05 -> 난이도가 회복 속도를 정한다
   [E] fold 2개 조합들의 840 step ρ 평균이 2800 step ρ보다 0.2 이상 높으면 '회복 길이 때문', 아니면 'fold 수(잡음) 때문'
 
-사용: python plan_diag.py > work/plan_diag.txt
+확인 단계 (fold 2·3·4, 탐색 결과를 본 뒤 확인 데이터를 만들기 전에 정함):
+  파인튜닝 + movement 결과는 prune_grid(mov_cum, 2800 step)에서, 비율 0은 기준 모델 result.json에서 읽는다.
+  확인 항목은 [A] 요구 90%의 과제별 계획 이득과 [D]이고, 기준은 탐색과 같다. 둘 다 '예'면 재현됐다고 본다.
+  [A]의 프루닝 쪽 기여, [A] 92%, [B]는 참고로 낸다. 생략 실행을 학습하지 않았으면 [C]는 보류, [E]는 판정하지 않는다.
+
+사용: python plan_diag.py > work/plan_diag.txt                          # 탐색 (fold 0·1)
+      python plan_diag.py --folds 2 3 4 > work/plan_confirm.txt         # 확인
 """
 import argparse
 import itertools
@@ -62,6 +68,28 @@ def load_prune(runs, tag, steps):
         rows.append({'task': j['task'], 'fold': j['fold'], 'ratio': j['ratio'],
                      'val': 100 * j['val']['acc'], 'test': 100 * j['test']['acc']})
     return pd.DataFrame(rows, columns=['task', 'fold', 'ratio', 'val', 'test'])
+
+
+def load_ft(runs, folds):
+    """파인튜닝 + movement 실행의 조건 x 비율 test·val(%). fold 0·1은 예산 분할 실험(split_points.csv),
+    다른 fold는 prune_grid(mov_cum, 2800 step) 결과이고 비율 0은 기준 모델 result.json이다."""
+    if set(folds) <= {0, 1}:
+        pts = load_points(runs)
+        pts = pts[pts.index.get_level_values('fold').isin(folds)]
+        return pts['test'][GRID], pts['val'][GRID]
+    d = load_prune(runs, 'mov_cum', REC_STEPS)
+    d = d[d.fold.isin(folds)]
+    if d.empty:
+        raise SystemExit(f'fold {folds}의 prune_grid mov_cum {REC_STEPS} step 결과가 없습니다.')
+    base = []
+    for t, f in d[['task', 'fold']].drop_duplicates().itertuples(index=False):
+        j = json.loads((runs / 'base' / t / f'fold{f}_seed0' / 'result.json').read_text(encoding='utf-8'))
+        base.append({'task': t, 'fold': f, 'ratio': 0.0, 'val': 100 * j['val']['acc'], 'test': 100 * j['test']['acc']})
+    d = pd.concat([d, pd.DataFrame(base)], ignore_index=True)
+    test, val = (d.pivot_table(index=['task', 'fold'], columns='ratio', values=v).reindex(columns=GRID)
+                 for v in ('test', 'val'))
+    keep = test.notna().all(axis=1) & val.notna().all(axis=1)
+    return test[keep], val[keep]
 
 
 def fit(tt, rule):
@@ -190,18 +218,21 @@ def skip_cost(ft, skip, sil):
     return r < 0 and p < 0.05
 
 
-def recovery_gain(runs, ft, sil):
+def recovery_gain(runs, ft, sil, folds):
     print('\n[D] 회복 이득: 2800 step − 840 step (movement, test %p, 양수면 길게 회복할수록 이득)')
     key = ['task', 'fold', 'ratio']
     short = load_prune(runs, 'mov_cum', 840)
-    short = short[short.fold.isin([0, 1])].rename(columns={'test': 'test_short'})[key + ['test_short']]
+    short = short[short.fold.isin(folds)].rename(columns={'test': 'test_short'})[key + ['test_short']]
     same = load_prune(runs, 'mov_cum', REC_STEPS).rename(columns={'test': 'test_long'})[key + ['test_long']]
-    same = same[same.ratio.isin([0.8, 0.9])].merge(short, on=key)
-    cross = (ft[[0.4, 0.6]].reset_index().melt(id_vars=['task', 'fold'], var_name='ratio', value_name='test_long')
-             .astype({'ratio': float}).merge(short, on=key))
+    same = same[same.fold.isin(folds)].merge(short, on=key)
+    low, low_name = same[same.ratio.isin([0.4, 0.6])], '0.4·0.6 (참고, 같은 코드)'
+    if low.empty:  # fold 0·1에서 0.4·0.6의 2800 step은 분할 실험 모델에만 있다
+        low = (ft[[0.4, 0.6]].reset_index().melt(id_vars=['task', 'fold'], var_name='ratio', value_name='test_long')
+               .astype({'ratio': float}).merge(short, on=key))
+        low_name = '0.4·0.6 (참고: 2800은 분할 실험 모델)'
     s = sil.groupby(level='task').mean()
     verdict = None
-    for name, d, main in [('0.8·0.9 (같은 코드)', same, True), ('0.4·0.6 (참고: 2800은 분할 실험 모델)', cross, False)]:
+    for name, d, main in [('0.8·0.9 (같은 코드)', same[same.ratio.isin([0.8, 0.9])], True), (low_name, low, False)]:
         if d.empty:
             print(f'  {name}: 결과 없음')
             continue
@@ -215,7 +246,7 @@ def recovery_gain(runs, ft, sil):
     return verdict
 
 
-def fold_effect(runs, ft, sim, tol):
+def fold_effect(runs, ft, sim, tol, folds):
     print(f'\n[E] H2가 약해진 이유: r*(원본 대비 {tol:g}%p 안에서 자를 수 있는 비율)와 실루엣(전체 이미지)의 순위 상관')
     short = load_prune(runs, 'mov_cum', 840)
     short = short[short.ratio.isin(GRID840[1:])]
@@ -243,11 +274,15 @@ def fold_effect(runs, ft, sim, tol):
     r28 = pd.Series({t: rstar(d28.loc[t, E_GRID[1:]].to_numpy(), tol, E_GRID) for t in d28.index})
     rho28 = spearmanr(sim.reindex(r28.index), r28)[0]
     all5, n5 = rho_840(E_GRID, range(5))
+    fs = '·'.join(map(str, folds))
     print(f'  참고: 840 step, fold 5개, H2의 비율 후보(0.2~0.95): {rho_840(GRID840, range(5))[0]:+.2f}')
     print(f'  840 step, fold 5개         : {all5:+.2f} (과제 {n5}개)')
-    print(f'  840 step, fold 2개 조합 10개: 평균 {np.mean(combos):+.2f} (최소 {min(combos):+.2f}, 최대 {max(combos):+.2f}),'
-          f' fold 0·1 {rho_840(E_GRID, (0, 1))[0]:+.2f}')
-    print(f'  2800 step, fold 0·1        : {rho28:+.2f} (과제 {len(r28)}개)')
+    print(f'  840 step, fold 2개 조합 10개: 평균 {np.mean(combos):+.2f} (최소 {min(combos):+.2f}, 최대 {max(combos):+.2f})')
+    print(f'  840 step, fold {fs:<11}: {rho_840(E_GRID, folds)[0]:+.2f}')
+    print(f'  2800 step, fold {fs:<10}: {rho28:+.2f} (과제 {len(r28)}개)')
+    if set(folds) != {0, 1}:
+        print('  (확인 단계에서는 [E]를 판정하지 않는다)')
+        return None
     return np.mean(combos) - rho28 >= 0.2
 
 
@@ -257,14 +292,16 @@ def main():
     ap.add_argument('--data-root', default=None)
     ap.add_argument('--targets', type=float, nargs='+', default=[90, 92], help='[A] 요구 test 정확도(%%). 첫 값이 주')
     ap.add_argument('--tol', type=float, default=3.0, help='[B] 원본 대비 허용 하락(%%p)')
+    ap.add_argument('--folds', type=int, nargs='+', default=[0, 1], help='0 1이면 탐색, 2 3 4면 확인 단계')
     args = ap.parse_args()
     pd.set_option('display.width', 220)
     runs = C.runs_dir(args.work_dir)
+    explore = set(args.folds) <= {0, 1}
 
-    pts = load_points(runs)
-    ft, ft_val = pts['test'][GRID], pts['val'][GRID]
-    size = pts['size_mb'][GRID].mean().to_dict()
+    ft, ft_val = load_ft(runs, args.folds)
+    size = load_points(runs)['size_mb'][GRID].mean().to_dict()  # 크기는 비율로만 정해진다
     sk = load_prune(runs, 'pretrained_l2', REC_STEPS)
+    sk = sk[sk.fold.isin(args.folds)]
     skip = skip_val = None
     if not sk.empty:  # 비율 0(자르지 않음)은 생략 실행에서도 파인튜닝한 원본이다
         skip, skip_val = (sk.pivot_table(index=['task', 'fold'], columns='ratio', values=v).reindex(columns=GRID)
@@ -274,7 +311,8 @@ def main():
         skip, skip_val = skip[keep], skip_val[keep]
     sil = train_silhouettes(args.work_dir, args.data_root, list(ft.index))
     sim = pd.read_csv(C.meta_dir(args.work_dir) / 'similarity.csv').set_index('task')
-    print(f'=== 과제별 계획 진단 (조건 {len(ft)}개, fold 0·1 탐색) ===')
+    stage = '탐색' if explore else '확인'
+    print(f'=== 과제별 계획 진단 (조건 {len(ft)}개, fold {"·".join(map(str, args.folds))} {stage}) ===')
 
     rules_a, a0 = ['FCA식', *MODELS], args.targets[0]
     print('\n[A] 배포 요구 목표: test 정확도가 요구치 이상이면서 최대한 자르기 (실행: 파인튜닝 + movement)')
@@ -289,13 +327,13 @@ def main():
                    -args.tol, size, 'ft', list(MODELS))
 
     c = skip_cost(ft, skip, sil) if skip is not None and len(skip) else None
-    d = recovery_gain(runs, ft, sil)
-    e = fold_effect(runs, ft, sim.silhouette, args.tol)
+    d = recovery_gain(runs, ft, sil, args.folds)
+    e = fold_effect(runs, ft, sim.silhouette, args.tol, args.folds)
 
     def yes(v):
         return '보류 (결과 없음)' if v is None else ('예' if v else '아니오')
 
-    print('\n[판정]')
+    print(f'\n[판정] ({stage} 단계)')
     for a, res in res_a.items():
         print(f'  [A] 요구 {a:g}% ({"주" if a == a0 else "보조"}): 과제별 계획 이득 {yes(res[MAIN]["gain"] >= 0.05)} '
               f'({res[MAIN]["gain"]:+.3f}), 프루닝 쪽 기여 {yes(res[MAIN]["gain"] - res["FCA식"]["gain"] >= 0.03)} '
@@ -303,7 +341,12 @@ def main():
     print(f'  [B] 원래 목표 회복: {yes(res_b[MAIN]["gain"] >= 0.05)} ({res_b[MAIN]["gain"]:+.3f})')
     print(f'  [C] 쉬운 과제만 생략: {yes(c)}')
     print(f'  [D] 난이도가 회복 속도를 정한다: {yes(d)}')
-    print(f'  [E] H2가 약해진 이유: {"보류 (결과 없음)" if e is None else ("회복 길이" if e else "fold 수(잡음)")}')
+    if explore:
+        print(f'  [E] H2가 약해진 이유: {"보류 (결과 없음)" if e is None else ("회복 길이" if e else "fold 수(잡음)")}')
+    else:
+        both = None if d is None else (res_a[a0][MAIN]['gain'] >= 0.05 and d)
+        print(f'  확인 항목 ([A] 요구 {a0:g}% 과제별 계획 이득, [D]): '
+              f'{"보류 (결과 없음)" if both is None else ("둘 다 재현됨" if both else "재현 안 됨")}')
 
 
 if __name__ == '__main__':
