@@ -203,25 +203,36 @@ def main():
     ap.add_argument('--shard', type=int, default=0)
     ap.add_argument('--nshards', type=int, default=1)
     ap.add_argument('--out-name', default='qready')
-    ap.add_argument('--smoke', action='store_true', help='pair_gl-pl fold0, 비율 0.8, movement·qr_full@1.0, 16 step')
+    ap.add_argument('--arms', nargs='+', default=None,
+                    help="'비율:방법' 목록 (예: 0.4:movement 0.6:movement). 주면 기본 비교군과 --ratios 대신 쓴다")
+    ap.add_argument('--smoke', action='store_true', help='pair_gl-pl fold0, 16 step (기본: 비율 0.8 movement·qr_full@1.0)')
     ap.add_argument('--summary', action='store_true')
     args = ap.parse_args()
     if args.summary:
         summary(args)
         return
+    arms = ARMS
+    if args.arms:
+        arms = {}
+        for item in args.arms:
+            r, a = item.split(':')
+            arms.setdefault(float(r), []).append(a)
+        args.ratios = sorted(arms)
     images, tasks = C.load_meta(args.work_dir, args.data_root)
     cache = C.EvalCache(args.work_dir, args.device)
     if args.smoke:
-        args.ratios, args.steps = [0.8], 16
+        if not args.arms:
+            arms = {0.8: ['movement', 'qr_full@1.0']}
+        args.ratios, args.steps = sorted(arms), 16
         run_condition(args, images, tasks, cache, 'pair_gl-pl', 0, C.runs_dir(args.work_dir) / (args.out_name + '_smoke'),
-                      {0.8: ['movement', 'qr_full@1.0']})
+                      arms)
         return
     names = list(tasks) if args.tasks == 'all' else args.tasks.split(',')
     conds = [(t, f) for t in names for f in args.folds]
     mine = conds[args.shard::args.nshards]
-    print(f'조건 {len(conds)}개 중 이 프로세스 {len(mine)}개, 조건마다 {sum(len(ARMS[r]) for r in args.ratios)}개 실행')
+    print(f'조건 {len(conds)}개 중 이 프로세스 {len(mine)}개, 조건마다 {sum(len(arms[r]) for r in args.ratios)}개 실행')
     for n, (t, f) in enumerate(mine, 1):
-        run_condition(args, images, tasks, cache, t, f, C.runs_dir(args.work_dir) / args.out_name, ARMS)
+        run_condition(args, images, tasks, cache, t, f, C.runs_dir(args.work_dir) / args.out_name, arms)
         print(f'[{n}/{len(mine)}] {t} fold{f} 완료', flush=True)
 
 
