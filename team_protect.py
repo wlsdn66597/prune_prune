@@ -39,8 +39,9 @@ def zs(x):
     return (x - x.mean()) / x.std().clamp_min(1e-12)
 
 
-def class_taylor(model, train_ds, labels, device, workers, seed):
-    """클래스마다 conv 채널의 1차 Taylor 점수 {클래스: ({conv: 출력 점수}, {conv: 입력 점수})}."""
+def class_taylor(model, train_ds, labels, device, workers, seed, target='loss'):
+    """클래스마다 conv 채널의 1차 Taylor 점수 {클래스: ({conv: 출력 점수}, {conv: 입력 점수})}.
+    target='loss'는 교차 엔트로피, 'logit'은 정답 logit의 기울기를 쓴다 (이미 잘 맞히는 클래스도 0이 되지 않는다)."""
     convs = {n: m for n, m in model.named_modules() if isinstance(m, nn.Conv2d)}
     out = {}
     model.eval()
@@ -52,7 +53,8 @@ def class_taylor(model, train_ds, labels, device, workers, seed):
         for k, (x, y) in enumerate(loader):
             if k >= N_BATCH:
                 break
-            F.cross_entropy(model(x.to(device)), y.to(device)).backward()
+            out_b, y = model(x.to(device)), y.to(device)
+            (F.cross_entropy(out_b, y) if target == 'loss' else out_b[torch.arange(len(y)), y].mean()).backward()
         o, i = {}, {}
         for n, m in convs.items():
             gw = (m.weight.grad * m.weight).detach().cpu()
