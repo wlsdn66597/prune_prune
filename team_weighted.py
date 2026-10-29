@@ -75,7 +75,7 @@ def train(args, work):
             del model
 
 
-def judge(args, work):
+def judge(args, work, title='분리도 가중 회복', arm_name='가중'):
     sil, w = class_weights(args.work_dir, args.data_root)
     weak = C.CLASSES6[int(np.argmin(sil))]
     images, _ = C.load_meta(args.work_dir, args.data_root)
@@ -84,7 +84,7 @@ def judge(args, work):
     rows = []
     for s in args.seeds:
         for r in args.ratios:
-            for arm, folder in [('표준', BASELINE[s]), ('가중', args.out_name)]:
+            for arm, folder in [('표준', BASELINE[s]), (arm_name, args.out_name)]:
                 p = work / folder / f'seed{s}' / f'mov_r{r}.pt'
                 if not p.exists():
                     print(f'모델 없음, 건너뜀: {p}')
@@ -97,16 +97,16 @@ def judge(args, work):
                 rows.append(row)
     d = pd.DataFrame(rows)
     cols = ['전체', 'macroF1', *C.CLASSES6]
-    print(f'=== 분리도 가중 회복 (팀 분할 6분류, 시드 {args.seeds}, test %) ===')
-    print('가중치: ' + ', '.join(f'{c} {v:.2f}' for c, v in zip(C.CLASSES6, w)) + f'   가장 약한 클래스(실루엣 최저): {weak}')
+    print(f'=== {title} (팀 분할 6분류, 시드 {args.seeds}, test %) ===')
+    print('위험 가중치: ' + ', '.join(f'{c} {v:.2f}' for c, v in zip(C.CLASSES6, w)) + f'   가장 약한 클래스(실루엣 최저): {weak}')
     verdicts = []
     for r in args.ratios:
         t = d[d.ratio == r].pivot_table(index='seed', columns='arm', values=cols)
-        diff = {c: t[c]['가중'] - t[c]['표준'] for c in cols}
-        print(f'\n비율 {r:g} (시드 평균, 가중 − 표준, 가중이 나은 시드 수)')
+        diff = {c: t[c][arm_name] - t[c]['표준'] for c in cols}
+        print(f'\n비율 {r:g} (시드 평균, {arm_name} − 표준, {arm_name}이 나은 시드 수)')
         for c in cols:
             dc = diff[c].dropna()
-            print(f'  {c:<10} 표준 {t[c]["표준"].mean():6.2f}  가중 {t[c]["가중"].mean():6.2f}  '
+            print(f'  {c:<10} 표준 {t[c]["표준"].mean():6.2f}  {arm_name} {t[c][arm_name].mean():6.2f}  '
                   f'차이 {dc.mean():+6.2f}  ({int((dc > 0).sum())}/{len(dc)})')
         ok = diff[weak].mean() >= 3 and diff['전체'].mean() >= -0.5
         verdicts.append(ok)
