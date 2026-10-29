@@ -138,6 +138,8 @@ def task_members(images, task):
     mask = images['cls'].isin(classes)
     if task['pool'] == 'cap':
         mask &= images['cap'].astype(bool)
+    elif task['pool'] == 'cap_tr':  # 재질은 클래스당 cap장, trash(137장)는 전부
+        mask &= images['cap'].astype(bool) | (images['cls'] == 'trash')
     sub = images[mask]
     return sub['idx'].to_numpy(), sub['cls'].map({c: i for i, c in enumerate(classes)}).to_numpy()
 

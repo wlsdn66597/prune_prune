@@ -79,6 +79,11 @@ def load_ft(runs, folds):
         pts = load_points(runs)
         pts = pts[pts.index.get_level_values('fold').isin(folds)]
         return pts['test'][GRID], pts['val'][GRID]
+    return load_ft_prune(runs, folds)
+
+
+def load_ft_prune(runs, folds):
+    """prune_grid(mov_cum, 2800 step) 결과로 만든 조건 x 비율 test·val(%). 모든 비율이 있는 조건만 남긴다."""
     d = load_prune(runs, 'mov_cum', REC_STEPS)
     d = d[d.fold.isin(folds)]
     if d.empty:
