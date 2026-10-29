@@ -160,14 +160,16 @@ def recalibrate_bn(model, cache, idx):
     model.eval()
 
 
-def recover(model, train_ds, steps, device, workers, seed):
-    """회복 학습: 노트북과 같은 AdamW, 학습률을 cosine으로 1e-4에서 0까지 줄이고 마지막 모델을 쓴다."""
+def recover(model, train_ds, steps, device, workers, seed, class_weight=None):
+    """회복 학습: 노트북과 같은 AdamW, 학습률을 cosine으로 1e-4에서 0까지 줄이고 마지막 모델을 쓴다.
+    class_weight를 주면 교차 엔트로피에 클래스별 가중치를 건다."""
     g = torch.Generator().manual_seed(seed)
     loader = DataLoader(train_ds, C.BATCH, shuffle=True, num_workers=workers, generator=g,
                         pin_memory=device != 'cpu', persistent_workers=workers > 0)
     opt = torch.optim.AdamW(model.parameters(), lr=C.LR)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=steps)
-    crit = nn.CrossEntropyLoss()
+    w = None if class_weight is None else torch.as_tensor(class_weight, dtype=torch.float32, device=device)
+    crit = nn.CrossEntropyLoss(weight=w)
     step = 0
     while step < steps:
         for x, y in loader:
