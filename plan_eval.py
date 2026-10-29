@@ -35,7 +35,7 @@ import json
 import numpy as np
 import pandas as pd
 from scipy.stats import binomtest, spearmanr
-from sklearn.metrics import silhouette_score
+from sklearn.metrics import silhouette_samples, silhouette_score
 
 import common as C
 from split_followup import rho_text
@@ -79,14 +79,27 @@ def load_points(runs):
     return pts[pts['test'][GRID].notna().all(axis=1)]
 
 
-def train_silhouettes(work_dir, data_root, conds):
-    """조건(과제, fold)마다 학습 이미지만으로 계산한 실루엣 (사전학습 ResNet-18 특징, 코사인)."""
+def task_feature(f, y, kind='mean'):
+    """사전학습 특징 f와 라벨 y의 분리도. mean: 실루엣(전체 평균), minclass: 클래스별 평균 실루엣의 최솟값
+    (가장 약한 클래스), minpair: 클래스 쌍마다 계산한 실루엣의 최솟값 (가장 헷갈리는 쌍)."""
+    if kind == 'mean':
+        return float(silhouette_score(f, y, metric='cosine'))
+    if kind == 'minclass':
+        s = silhouette_samples(f, y, metric='cosine')
+        return float(min(s[y == c].mean() for c in np.unique(y)))
+    cs = np.unique(y)
+    return float(min(silhouette_score(f[np.isin(y, [a, b])], y[np.isin(y, [a, b])], metric='cosine')
+                     for i, a in enumerate(cs) for b in cs[i + 1:]))
+
+
+def train_silhouettes(work_dir, data_root, conds, kind='mean'):
+    """조건(과제, fold)마다 학습 이미지만으로 계산한 분리도 (사전학습 ResNet-18 특징, 코사인, task_feature 참고)."""
     images, tasks = C.load_meta(work_dir, data_root)
     feats = np.load(C.meta_dir(work_dir) / 'feat_pretrained.npy')
     sil = {}
     for t, f in conds:
         idx, y = C.task_split(images, tasks[t], f)['train']
-        sil[(t, f)] = silhouette_score(feats[idx], y, metric='cosine')
+        sil[(t, f)] = task_feature(feats[idx], y, kind)
     return pd.Series(sil).rename_axis(['task', 'fold'])
 
 

@@ -19,6 +19,9 @@
 사용: python team_plan.py plan && python team_plan.py train && python team_plan.py judge > work/team_plan_result.txt
       python team_plan.py plan --family ext --plan-file team_plan2.json   # 2판 (train·judge도 같은 --plan-file,
                                                                             --seeds 3 4 5 --out-name team_plan2)
+3판 (--feature minclass): 2판도 2~3%p 낙관적이었고, 클래스별 재현율에서 metal(0.4에서 −10.8%p)·glass가 먼저 무너졌다.
+          평균 실루엣은 한 클래스의 붕괴를 못 잡으므로, 척도만 '가장 약한 클래스의 실루엣'으로 바꾼다 (과제군은 2판과 같다).
+          feature_check.py에서 과제군 안 예측이 나아질 때만 돌리고, 새 팀 원본 seed 6~10으로 2판과 같은 기준으로 판정한다.
 """
 import argparse
 import copy
@@ -28,25 +31,29 @@ import time
 import numpy as np
 import pandas as pd
 import torch
-from sklearn.metrics import silhouette_score
 
 import common as C
 import prune_common as P
 from plan_diag import MAIN, calibrate, climb, fit, load_ft, load_ft_prune
-from plan_eval import GRID, REC_STEPS, train_silhouettes
+from plan_eval import GRID, REC_STEPS, task_feature, train_silhouettes
 
 TARGETS = [85.0, 88.0, 90.0]  # 첫 값이 주
 EXCLUDE = 'all6'
 MAX_ERR = 1.5  # 2판 판정: 요구 85%에서 허용하는 예측 오차 (%p)
 
 
-def plan(args, runs):
+def load_family(runs, ext):
+    """계획식을 만드는 과제군: 조건 x 비율 test 정확도(%). all6은 뺀다."""
     tests = [load_ft(runs, [0, 1])[0], load_ft(runs, [2, 3, 4])[0]]
-    if args.family == 'ext':  # 넓힌 과제(fold 0·1)는 prune_grid 결과에만 있다. 기존 과제는 비율이 모자라 저절로 빠진다
+    if ext:  # 넓힌 과제(fold 0·1)는 prune_grid 결과에만 있다. 기존 과제는 비율이 모자라 저절로 빠진다
         tests.append(load_ft_prune(runs, [0, 1])[0])
     V = pd.concat(tests)
-    V = V[(V.index.get_level_values('task') != EXCLUDE) & ~V.index.duplicated()]
-    sil = train_silhouettes(args.work_dir, args.data_root, list(V.index))
+    return V[(V.index.get_level_values('task') != EXCLUDE) & ~V.index.duplicated()]
+
+
+def plan(args, runs):
+    V = load_family(runs, args.family == 'ext')
+    sil = train_silhouettes(args.work_dir, args.data_root, list(V.index), args.feature)
     sim = pd.read_csv(C.meta_dir(args.work_dir) / 'similarity.csv').set_index('task')
     tt = V.groupby(level='task').mean()
     tt['sil'], tt['k'] = sil.groupby(level='task').mean(), sim.k
@@ -54,14 +61,14 @@ def plan(args, runs):
     images, tasks = C.load_meta(args.work_dir, args.data_root)
     idx, y = C.team_split(images)['train']
     feats = np.load(C.meta_dir(args.work_dir) / 'feat_pretrained.npy')
-    s_team, k_team = float(silhouette_score(feats[idx], y, metric='cosine')), len(C.CLASSES6)
+    s_team, k_team = task_feature(feats[idx], y, args.feature), len(C.CLASSES6)
     trash = sum('trash' in tasks[t]['classes'] for t in tt.index)
-    print(f'=== 팀 분할 6분류 계획 ({args.family}: {len(tt)}과제, 그중 trash 포함 {trash}개, 조건 {len(V)}개) ===')
+    print(f'=== 팀 분할 6분류 계획 ({args.family}, 척도 {args.feature}: {len(tt)}과제, 그중 trash 포함 {trash}개, '
+          f'조건 {len(V)}개) ===')
     print('과제 클래스 수: ' + ', '.join(f'{k}클래스 {n}개' for k, n in tt.k.value_counts().sort_index().items()))
-    print(f'팀 분할 학습 이미지 실루엣 {s_team:.3f} (식에 쓴 과제 범위 {tt.sil.min():.3f}~{tt.sil.max():.3f}, '
-          f'all6 전체 이미지 {sim.silhouette[EXCLUDE]:.3f})')
+    print(f'팀 분할 학습 이미지 척도 {s_team:.3f} (식에 쓴 과제 범위 {tt.sil.min():.3f}~{tt.sil.max():.3f})')
 
-    out = {'silhouette': s_team, 'family': args.family, 'n_tasks': len(tt), 'targets': {},
+    out = {'silhouette': s_team, 'family': args.family, 'feature': args.feature, 'n_tasks': len(tt), 'targets': {},
            'made': time.strftime('%Y-%m-%d %H:%M:%S')}
     for a in TARGETS:
         feas = V[0.0] >= a
@@ -128,8 +135,8 @@ def judge(args, runs):
             j = json.loads(p.read_text(encoding='utf-8'))
             acc[(s, j['ratio'])] = 100 * j['test']['acc']
     tab = pd.Series(acc).unstack(0)  # 비율 x 시드
-    print(f'=== 팀 분할 6분류 계획 판정 ({pl.get("family", "orig")}, 예측 저장 {pl["made"]}, '
-          f'실루엣 {pl["silhouette"]:.3f}, 시드 {args.seeds}) ===')
+    print(f'=== 팀 분할 6분류 계획 판정 ({pl.get("family", "orig")}, 척도 {pl.get("feature", "mean")}, '
+          f'예측 저장 {pl["made"]}, 척도값 {pl["silhouette"]:.3f}, 시드 {args.seeds}) ===')
     print('\n시드별 test 정확도 (%)')
     print(tab.assign(평균=tab.mean(axis=1), sd=tab.std(axis=1)).round(2).to_string())
     print('\n[판정] (미리 정함)')
@@ -148,7 +155,7 @@ def judge(args, runs):
         print(line)
         if float(a) == TARGETS[0] and pl.get('family') == 'ext':
             fine = ok and abs(pred - real) <= MAX_ERR
-            print(f'  2판 판정 (요구 {float(a):g}%에서 성공이고 |오차| ≤ {MAX_ERR}%p): '
+            print(f'  판정 (요구 {float(a):g}%에서 성공이고 |오차| ≤ {MAX_ERR}%p): '
                   f'{"6분류에 적용됨" if fine else "6분류에 적용 안 됨"}')
 
 
@@ -162,6 +169,8 @@ def main():
     ap.add_argument('--out-name', default='team_plan', help='모델 폴더 이름 (work/ 아래, 시험 실행은 다른 이름으로)')
     ap.add_argument('--family', choices=['orig', 'ext'], default='orig', help='계획식에 쓸 과제군 (ext: add_tasks.py의 과제 포함)')
     ap.add_argument('--plan-file', default='team_plan.json', help='학습 전 예측을 저장·읽는 파일 (work/ 아래)')
+    ap.add_argument('--feature', choices=['mean', 'minclass'], default='mean',
+                    help='계획식의 난이도 척도 (mean: 실루엣, minclass: 가장 약한 클래스의 실루엣)')
     ap.add_argument('--workers', type=int, default=4)
     ap.add_argument('--device', default='cuda' if torch.cuda.is_available() else 'cpu')
     args = ap.parse_args()
